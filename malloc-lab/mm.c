@@ -29,7 +29,6 @@ team_t team = {
     ""};
 
 #define WSIZE 4
-#define ALIGNMENT 8
 #define DSIZE 8
 #define CHUNKSIZE (1<<12)
 
@@ -64,9 +63,6 @@ static void place(void *bp, size_t asize);
 /* 가장 가까운 ALIGNMENT의 배수로 올림한다. */
 /* 예: ALIGN(1)=8, ALIGN(8)=8, ALIGN(9)=16, ALIGN(13)=16 */
 /* size_t 하나를 저장하는 데 필요한 크기를 8의 배수로 맞춘 값. 지금 환경(64비트)에서는 8. */
-#define ALIGN(size) (((size) + (ALIGNMENT - 1)) & ~0x7)
-
-#define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
 /*
  * mm_init - malloc 패키지를 초기화한다. 아무것도 안 하고 0(성공)만 반환
@@ -134,11 +130,53 @@ void *mm_realloc(void *bp, size_t size)
     void *oldbp = bp;
     void *newbp;
     size_t copySize;
+    size_t asize;
 
-    newbp = mm_malloc(size);
-    if (newbp == NULL)
+    // 유효성 검사
+
+    if (oldbp == NULL) return mm_malloc(size);
+
+    if (size == 0)
+    {
+        mm_free(oldbp);
         return NULL;
-    copySize = *(size_t *)((char *)oldbp - SIZE_T_SIZE);
+    }
+
+    // asize 계산
+    if (size <= DSIZE)
+        asize = 2 * DSIZE;
+    else
+        asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
+
+    // 제자리 확장 로직 시작
+    if (asize <= GET_SIZE(HDRP(oldbp)))
+    {
+        return oldbp;
+    }
+    else if (GET_ALLOC(HDRP(NEXT_BLKP(oldbp))) == 0 && GET_SIZE(HDRP(oldbp)) + GET_SIZE(HDRP(NEXT_BLKP(oldbp))) >= asize)
+    {
+        size_t new_size = GET_SIZE(HDRP(oldbp)) + GET_SIZE(HDRP(NEXT_BLKP(oldbp)));
+        PUT(HDRP(oldbp), PACK(new_size, 1));
+        PUT(FTRP(oldbp), PACK(new_size, 1));
+        return oldbp;
+    }
+    else if (GET_SIZE(HDRP(NEXT_BLKP(oldbp))) == 0)
+    {
+        if (extend_heap((asize - GET_SIZE(HDRP(oldbp))) / WSIZE) != NULL)
+        {
+            size_t new_size = GET_SIZE(HDRP(oldbp)) + GET_SIZE(HDRP(NEXT_BLKP(oldbp)));
+            PUT(HDRP(oldbp), PACK(new_size, 1));
+            PUT(FTRP(oldbp), PACK(new_size, 1));
+            return oldbp;
+        }
+    }
+
+    // 이사 후 확장 로직 시작 
+    // 새 블록을 받았나?
+    newbp = mm_malloc(size);
+    if (newbp == NULL) return NULL;
+
+    copySize = GET_SIZE(HDRP(oldbp)) - DSIZE;
     if (size < copySize)
         copySize = size;
     memcpy(newbp, oldbp, copySize);
