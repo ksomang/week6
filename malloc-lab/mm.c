@@ -34,6 +34,7 @@ team_t team = {
 #define CHUNKSIZE (1<<12)
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
+#define MIN_BLOCK (2*DSIZE)
 
 #define PACK(size, alloc) ((size) | (alloc))
 
@@ -86,21 +87,31 @@ int mm_init(void)
     return 0;
 }
 
-/*
- * mm_malloc - 아무것도 안 하고 0(성공)만 반환
- *     아무것도 안 하고 0(성공)만 반환
- */
 void *mm_malloc(size_t size)
 {
-    int newsize = ALIGN(size + SIZE_T_SIZE);
-    void *p = mem_sbrk(newsize);
-    if (p == (void *)-1)
-        return NULL;
+    size_t asize;  // 조정한 블록 크기
+    size_t extendsize;  // 맞는 블록이 없을 때 힙을 늘릴 크기
+    char *bp;
+    
+    if (size == 0) return NULL;
+
+    if (size <= DSIZE)
+        asize = 2 * DSIZE;
     else
-    {
-        *(size_t *)p = size;
-        return (void *)((char *)p + SIZE_T_SIZE);
+        asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
+
+    // 안쪽 괄호를 빼면 != 가 = 보다 먼저 계산돼서 bp에 0이나 1이 들어간다.
+    if ((bp = find_fit(asize)) != NULL) {
+        place(bp, asize);
+        return bp;
     }
+
+    extendsize = MAX(asize, CHUNKSIZE);
+    if ((bp = extend_heap(extendsize/WSIZE)) == NULL) return NULL;
+
+    place(bp, asize);
+
+    return bp;
 }
 
 /*
@@ -183,4 +194,48 @@ static void *extend_heap(size_t words)
     PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1));
 
     return coalesce(bp);
+}
+
+static void *find_fit(size_t asize)
+{
+    void *bp = NEXT_BLKP(heap_listp);
+    
+    if (GET_SIZE(HDRP(bp)) == 0) return NULL;
+
+    while (GET_SIZE(HDRP(bp)) != 0)
+    {
+        if (GET_ALLOC(HDRP(bp)) == 0 && GET_SIZE(HDRP(bp)) >= asize)
+        {
+            return bp;
+        }
+        else
+        {
+            bp = NEXT_BLKP(bp);
+        }
+    }
+
+    return NULL;
+}
+
+static void place(void *bp, size_t asize)
+{
+    // 현재 블록 크기 읽기
+    size_t csize = GET_SIZE(HDRP(bp));
+
+    if ((csize - asize) >= MIN_BLOCK)
+    {
+        size_t remain_size = csize - asize;
+
+        PUT(HDRP(bp), PACK(asize, 1));
+        PUT(FTRP(bp), PACK(asize, 1));
+        bp = NEXT_BLKP(bp);  
+        PUT(HDRP(bp), PACK(remain_size, 0));
+        PUT(FTRP(bp), PACK(remain_size, 0));
+    }
+
+    else
+    {
+        PUT(HDRP(bp), PACK(csize, 1));
+        PUT(FTRP(bp), PACK(csize, 1));  
+    }
 }
