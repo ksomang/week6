@@ -106,32 +106,66 @@ void *mm_malloc(size_t size)
 /*
  * mm_free - 해제는 아무것도 하지 않는다
  */
-void mm_free(void *ptr)
+void mm_free(void *bp)
 {
+    size_t size = GET_SIZE(HDRP(bp));
+
+    PUT(HDRP(bp), PACK(size, 0));
+    PUT(FTRP(bp), PACK(size, 0));
+    coalesce(bp);
 }
 
 /*
  * mm_realloc - mm_malloc과 mm_free를 이용해 간단하게 구현했다.
  */
-void *mm_realloc(void *ptr, size_t size)
+void *mm_realloc(void *bp, size_t size)
 {
-    void *oldptr = ptr;
-    void *newptr;
+    void *oldbp = bp;
+    void *newbp;
     size_t copySize;
 
-    newptr = mm_malloc(size);
-    if (newptr == NULL)
+    newbp = mm_malloc(size);
+    if (newbp == NULL)
         return NULL;
-    copySize = *(size_t *)((char *)oldptr - SIZE_T_SIZE);
+    copySize = *(size_t *)((char *)oldbp - SIZE_T_SIZE);
     if (size < copySize)
         copySize = size;
-    memcpy(newptr, oldptr, copySize);
-    mm_free(oldptr);
-    return newptr;
+    memcpy(newbp, oldbp, copySize);
+    mm_free(oldbp);
+    return newbp;
 }
 
 static void *coalesce(void *bp)
 {
+    size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));  // 앞의 블록 할당 비트 저장
+    size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp))); // 뒤의 블록 할당 비트 저장
+    size_t size = GET_SIZE(HDRP(bp)); // 현재 블록 크기 저장
+
+    if (prev_alloc && next_alloc) { return bp;}
+
+    else if (prev_alloc && !next_alloc) {
+        size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
+        PUT(HDRP(bp), PACK(size, 0));
+        PUT(FTRP(bp), PACK(size, 0));
+    }
+
+    else if (!prev_alloc && next_alloc) {
+        size += GET_SIZE(HDRP(PREV_BLKP(bp)));
+        PUT(FTRP(bp), PACK(size, 0));
+        PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
+        bp = PREV_BLKP(bp);
+    }
+
+    else {
+        size += GET_SIZE(HDRP(PREV_BLKP(bp))) +
+                GET_SIZE(FTRP(NEXT_BLKP(bp)));
+        
+        PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
+        PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
+
+        bp = PREV_BLKP(bp);
+    }
+
     return bp;
 }
 
