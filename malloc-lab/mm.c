@@ -29,7 +29,7 @@ team_t team = {
     ""};
 
 /* 배치 정책: 1 = first fit, 2 = next fit, 3 = best fit */
-#define FIT_POLICY 3
+#define FIT_POLICY 2
 
 /* rover 업데이트 방식을 고르는 스위치 */
 /* 0 = 찾은 블록, 1 = 다음 블록 */
