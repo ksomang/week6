@@ -29,7 +29,11 @@ team_t team = {
     ""};
 
 /* 배치 정책: 1 = first fit, 2 = next fit, 3 = best fit */
-#define FIT_POLICY 1
+#define FIT_POLICY 2
+
+/* rover 업데이트 방식을 고르는 스위치 */
+/* 0 = 찾은 블록, 1 = 다음 블록 */
+#define ROVER_NEXT 0
 
 #define WSIZE 4
 #define DSIZE 8
@@ -53,6 +57,9 @@ team_t team = {
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
 
 static char *heap_listp;
+static char *rover;
+
+static void fix_rover(char *bp);
 
 static void *extend_heap(size_t words);
 
@@ -64,12 +71,6 @@ static void *next_fit(size_t asize);
 static void *best_fit(size_t asize);
 
 static void place(void *bp, size_t asize);
-
-/* 1 워드(4) 또는 더블 워드(8) 정렬, 반환하는 주소는 8의 배수여야 함. */
-
-/* 가장 가까운 ALIGNMENT의 배수로 올림한다. */
-/* 예: ALIGN(1)=8, ALIGN(8)=8, ALIGN(9)=16, ALIGN(13)=16 */
-/* size_t 하나를 저장하는 데 필요한 크기를 8의 배수로 맞춘 값. 지금 환경(64비트)에서는 8. */
 
 /*
  * mm_init - malloc 패키지를 초기화한다. 아무것도 안 하고 0(성공)만 반환
@@ -84,6 +85,7 @@ int mm_init(void)
     PUT(heap_listp + (3 * WSIZE), PACK(0, 1));
 
     heap_listp += (2 * WSIZE);
+    rover = heap_listp + DSIZE;
 
     if (extend_heap(CHUNKSIZE/WSIZE) == NULL) return -1;
 
@@ -165,6 +167,9 @@ void *mm_realloc(void *bp, size_t size)
         size_t new_size = GET_SIZE(HDRP(oldbp)) + GET_SIZE(HDRP(NEXT_BLKP(oldbp)));
         PUT(HDRP(oldbp), PACK(new_size, 1));
         PUT(FTRP(oldbp), PACK(new_size, 1));
+
+        fix_rover(oldbp);
+
         return oldbp;
     }
     else if (GET_SIZE(HDRP(NEXT_BLKP(oldbp))) == 0)
@@ -174,6 +179,9 @@ void *mm_realloc(void *bp, size_t size)
             size_t new_size = GET_SIZE(HDRP(oldbp)) + GET_SIZE(HDRP(NEXT_BLKP(oldbp)));
             PUT(HDRP(oldbp), PACK(new_size, 1));
             PUT(FTRP(oldbp), PACK(new_size, 1));
+
+            fix_rover(oldbp);
+
             return oldbp;
         }
     }
@@ -221,6 +229,8 @@ static void *coalesce(void *bp)
 
         bp = PREV_BLKP(bp);
     }
+
+    fix_rover(bp);
 
     return bp;
 }
@@ -275,7 +285,44 @@ static void *first_fit(size_t asize)
 
 static void *next_fit(size_t asize)
 {
-    /* TODO: next fit 구현 */
+    void *bp = rover;
+
+    while (GET_SIZE(HDRP(bp)) != 0)
+    {
+        if (GET_ALLOC(HDRP(bp)) == 0 && GET_SIZE(HDRP(bp)) >= asize)
+        {
+            #if ROVER_NEXT == 0
+                rover = bp;
+            #else
+                rover = NEXT_BLKP(bp);
+            #endif
+            return bp;
+        }
+        else
+        {
+            bp = NEXT_BLKP(bp);
+        }
+    }
+
+    bp = NEXT_BLKP(heap_listp);
+
+    while (bp != rover && GET_SIZE(HDRP(bp)) != 0)
+    {
+        if (GET_ALLOC(HDRP(bp)) == 0 && GET_SIZE(HDRP(bp)) >= asize)
+        {
+            #if ROVER_NEXT == 0
+                rover = bp;
+            #else
+                rover = NEXT_BLKP(bp);
+            #endif
+            return bp;
+        }
+        else
+        {
+            bp = NEXT_BLKP(bp);
+        }
+    }
+
     return NULL;
 }
 
@@ -306,4 +353,9 @@ static void place(void *bp, size_t asize)
         PUT(HDRP(bp), PACK(csize, 1));
         PUT(FTRP(bp), PACK(csize, 1));  
     }
+}
+
+static void fix_rover(char *bp)
+{
+    if (rover > bp && rover < NEXT_BLKP(bp)) rover = bp;
 }
