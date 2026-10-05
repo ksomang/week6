@@ -28,6 +28,9 @@ team_t team = {
     /* Second member's email address (leave blank if none) */
     ""};
 
+/* 배치 정책: 1 = first fit, 2 = next fit, 3 = best fit */
+#define FIT_POLICY 1
+
 #define WSIZE 4
 #define DSIZE 8
 #define CHUNKSIZE (1<<12)
@@ -56,6 +59,10 @@ static void *extend_heap(size_t words);
 static void *coalesce(void *bp);
 
 static void *find_fit(size_t asize);
+static void *first_fit(size_t asize);
+static void *next_fit(size_t asize);
+static void *best_fit(size_t asize);
+
 static void place(void *bp, size_t asize);
 
 /* 1 워드(4) 또는 더블 워드(8) 정렬, 반환하는 주소는 8의 배수여야 함. */
@@ -236,6 +243,17 @@ static void *extend_heap(size_t words)
 
 static void *find_fit(size_t asize)
 {
+    #if FIT_POLICY == 1
+        return first_fit(asize);
+    #elif FIT_POLICY == 2
+        return next_fit(asize);
+    #else
+        return best_fit(asize);
+    #endif
+}
+
+static void *first_fit(size_t asize)
+{
     void *bp = NEXT_BLKP(heap_listp);
     
     if (GET_SIZE(HDRP(bp)) == 0) return NULL;
@@ -252,6 +270,18 @@ static void *find_fit(size_t asize)
         }
     }
 
+    return NULL;
+}
+
+static void *next_fit(size_t asize)
+{
+    /* TODO: next fit 구현 */
+    return NULL;
+}
+
+static void *best_fit(size_t asize)
+{
+    /* TODO: best fit 구현 */
     return NULL;
 }
 
