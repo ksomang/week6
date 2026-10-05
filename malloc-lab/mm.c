@@ -29,7 +29,7 @@ team_t team = {
     ""};
 
 /* 배치 정책: 1 = first fit, 2 = next fit, 3 = best fit */
-#define FIT_POLICY 2
+#define FIT_POLICY 3
 
 /* rover 업데이트 방식을 고르는 스위치 */
 /* 0 = 찾은 블록, 1 = 다음 블록 */
@@ -328,8 +328,28 @@ static void *next_fit(size_t asize)
 
 static void *best_fit(size_t asize)
 {
-    /* TODO: best fit 구현 */
-    return NULL;
+    void *best_bp = NULL;
+    size_t best_size = 0;
+    void *bp = NEXT_BLKP(heap_listp);
+
+    while (GET_SIZE(HDRP(bp)) != 0)
+    {
+        if (GET_ALLOC(HDRP(bp)) == 0)
+        {
+            if (GET_SIZE(HDRP(bp)) >= asize)
+            {
+                if (GET_SIZE(HDRP(bp)) == asize) return bp;
+                else if (best_bp == NULL || GET_SIZE(HDRP(bp)) < best_size)
+                {
+                    best_bp = bp;
+                    best_size = GET_SIZE(HDRP(bp));
+                }
+            }
+        }
+        bp = NEXT_BLKP(bp);
+    }
+
+    return best_bp;
 }
 
 static void place(void *bp, size_t asize)
