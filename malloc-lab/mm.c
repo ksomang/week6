@@ -39,6 +39,9 @@ team_t team = {
 #define DSIZE 8
 #define CHUNKSIZE (1<<12)
 
+#define PLACE_SPLIT 96
+
+
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 #define MIN_BLOCK (3*DSIZE)
 
@@ -78,7 +81,7 @@ static void *first_fit(size_t asize);
 static void *next_fit(size_t asize);
 static void *best_fit(size_t asize);
 
-static void place(void *bp, size_t asize);
+static void *place(void *bp, size_t asize);
 
 static void mark_alloc(void *bp, size_t size);
 static void mark_free(void *bp, size_t size);
@@ -134,16 +137,25 @@ void *mm_malloc(size_t size)
 
     // 안쪽 괄호를 빼면 != 가 = 보다 먼저 계산돼서 bp에 0이나 1이 들어간다.
     if ((bp = find_fit(asize)) != NULL) {
-        place(bp, asize);
-        return bp;
+        return place(bp, asize);
     }
 
-    extendsize = MAX(asize, CHUNKSIZE);
+        // 현재 힙 끝
+        char *brk = mem_sbrk(0);
+        // 마지막 블록 푸터
+        char *last_ftr = brk - DSIZE;
+
+    if (GET_ALLOC(last_ftr) == 0)
+    {
+        extendsize = asize - GET_SIZE(last_ftr);
+    }
+    else
+    {
+        extendsize = MAX(asize, CHUNKSIZE);
+    }
     if ((bp = extend_heap(extendsize/WSIZE)) == NULL) return NULL;
 
-    place(bp, asize);
-
-    return bp;
+    return place(bp, asize);
 }
 
 /*
@@ -383,24 +395,33 @@ static void *best_fit(size_t asize)
     return best_bp;
 }
 
-static void place(void *bp, size_t asize)
+static void *place(void *bp, size_t asize)
 {
     // 현재 블록 크기 읽기
     size_t csize = GET_SIZE(HDRP(bp));
     remove_free(bp);
+    size_t remain = csize - asize;
 
-    if ((csize - asize) >= MIN_BLOCK)
+    if (remain < MIN_BLOCK)
     {
-        size_t remain_size = csize - asize;
-        mark_alloc(bp, asize);
-        bp = NEXT_BLKP(bp);  
-        mark_free(bp, remain_size);
-        insert_free(bp);
+        mark_alloc(bp, csize);
+        return bp;
     }
-
+    else if (asize >= PLACE_SPLIT)
+    {
+        mark_free(bp, remain);
+        insert_free(bp);
+        char *alloc_bp = NEXT_BLKP(bp);
+        mark_alloc(alloc_bp, asize);
+        return alloc_bp;
+    }
     else
     {
-        mark_alloc(bp, csize);  
+        mark_alloc(bp, asize);
+        char *next = NEXT_BLKP(bp);
+        mark_free(next, remain);
+        insert_free(next);
+        return bp;
     }
 }
 
