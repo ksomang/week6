@@ -29,7 +29,7 @@ team_t team = {
     ""};
 
 /* 배치 정책: 1 = first fit, 2 = next fit, 3 = best fit */
-#define FIT_POLICY 2
+#define FIT_POLICY 1
 
 /* rover 업데이트 방식을 고르는 스위치 */
 /* 0 = 찾은 블록, 1 = 다음 블록 */
@@ -40,7 +40,7 @@ team_t team = {
 #define CHUNKSIZE (1<<12)
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
-#define MIN_BLOCK (2*DSIZE)
+#define MIN_BLOCK (3*DSIZE)
 
 #define PACK(size, alloc) ((size) | (alloc))
 
@@ -56,10 +56,18 @@ team_t team = {
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
 
+#define PRED(bp) (*(char **)(bp))
+#define SUCC(bp) (*((char **)(bp) + 1))
+
+#define LIST_NUM 1
+
 static char *heap_listp;
 static char *rover;
+static char **free_lists;
 
-static void fix_rover(char *bp);
+#if FIT_POLICY == 2
+    static void fix_rover(char *bp);
+#endif
 
 static void *extend_heap(size_t words);
 
@@ -72,12 +80,32 @@ static void *best_fit(size_t asize);
 
 static void place(void *bp, size_t asize);
 
+static void mark_alloc(void *bp, size_t size);
+static void mark_free(void *bp, size_t size);
+
+static size_t adjust_size(size_t size);
+
+static int get_class(size_t size);
+static void insert_free(void *bp);
+static void remove_free(void *bp);
+
 /*
  * mm_init - malloc 패키지를 초기화한다. 아무것도 안 하고 0(성공)만 반환
  */
 int mm_init(void)
 {
-    if ((heap_listp = mem_sbrk(4*WSIZE)) == (void *)-1) return -1;
+    char *start = mem_sbrk(LIST_NUM*DSIZE + 4*WSIZE);
+
+    if (start == (void *)-1) return -1;
+
+    free_lists = (char **)start;
+
+    for (int i = 0; i < LIST_NUM; i++)
+    {
+        free_lists[i] = NULL;
+    }
+
+    heap_listp = start + LIST_NUM*DSIZE;
 
     PUT(heap_listp, 0);
     PUT(heap_listp + (1 * WSIZE), PACK(DSIZE, 1));
@@ -85,7 +113,9 @@ int mm_init(void)
     PUT(heap_listp + (3 * WSIZE), PACK(0, 1));
 
     heap_listp += (2 * WSIZE);
-    rover = heap_listp + DSIZE;
+    #if FIT_POLICY == 2
+        rover = heap_listp + DSIZE;
+    #endif
 
     if (extend_heap(CHUNKSIZE/WSIZE) == NULL) return -1;
 
@@ -100,10 +130,7 @@ void *mm_malloc(size_t size)
     
     if (size == 0) return NULL;
 
-    if (size <= DSIZE)
-        asize = 2 * DSIZE;
-    else
-        asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
+    asize = adjust_size(size);
 
     // 안쪽 괄호를 빼면 != 가 = 보다 먼저 계산돼서 bp에 0이나 1이 들어간다.
     if ((bp = find_fit(asize)) != NULL) {
@@ -126,8 +153,7 @@ void mm_free(void *bp)
 {
     size_t size = GET_SIZE(HDRP(bp));
 
-    PUT(HDRP(bp), PACK(size, 0));
-    PUT(FTRP(bp), PACK(size, 0));
+    mark_free(bp, size);
     coalesce(bp);
 }
 
@@ -152,11 +178,8 @@ void *mm_realloc(void *bp, size_t size)
     }
 
     // asize 계산
-    if (size <= DSIZE)
-        asize = 2 * DSIZE;
-    else
-        asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
-
+    asize = adjust_size(size);
+    
     // 제자리 확장 로직 시작
     if (asize <= GET_SIZE(HDRP(oldbp)))
     {
@@ -165,10 +188,12 @@ void *mm_realloc(void *bp, size_t size)
     else if (GET_ALLOC(HDRP(NEXT_BLKP(oldbp))) == 0 && GET_SIZE(HDRP(oldbp)) + GET_SIZE(HDRP(NEXT_BLKP(oldbp))) >= asize)
     {
         size_t new_size = GET_SIZE(HDRP(oldbp)) + GET_SIZE(HDRP(NEXT_BLKP(oldbp)));
-        PUT(HDRP(oldbp), PACK(new_size, 1));
-        PUT(FTRP(oldbp), PACK(new_size, 1));
+        remove_free(NEXT_BLKP(oldbp));
+        mark_alloc(oldbp, new_size);
 
-        fix_rover(oldbp);
+        #if FIT_POLICY == 2
+            fix_rover(oldbp);
+        #endif    
 
         return oldbp;
     }
@@ -177,10 +202,12 @@ void *mm_realloc(void *bp, size_t size)
         if (extend_heap((asize - GET_SIZE(HDRP(oldbp))) / WSIZE) != NULL)
         {
             size_t new_size = GET_SIZE(HDRP(oldbp)) + GET_SIZE(HDRP(NEXT_BLKP(oldbp)));
-            PUT(HDRP(oldbp), PACK(new_size, 1));
-            PUT(FTRP(oldbp), PACK(new_size, 1));
+            remove_free(NEXT_BLKP(oldbp));
+            mark_alloc(oldbp, new_size);
 
-            fix_rover(oldbp);
+            #if FIT_POLICY == 2
+                fix_rover(oldbp);
+            #endif 
 
             return oldbp;
         }
@@ -205,32 +232,39 @@ static void *coalesce(void *bp)
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp))); // 뒤의 블록 할당 비트 저장
     size_t size = GET_SIZE(HDRP(bp)); // 현재 블록 크기 저장
 
-    if (prev_alloc && next_alloc) { return bp;}
+    if (prev_alloc && next_alloc)
+    {
+        
+    }
 
     else if (prev_alloc && !next_alloc) {
+        remove_free(NEXT_BLKP(bp));
         size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
-        PUT(HDRP(bp), PACK(size, 0));
-        PUT(FTRP(bp), PACK(size, 0));
+        mark_free(bp, size);
     }
 
     else if (!prev_alloc && next_alloc) {
+        remove_free(PREV_BLKP(bp));
         size += GET_SIZE(HDRP(PREV_BLKP(bp)));
-        PUT(FTRP(bp), PACK(size, 0));
-        PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
         bp = PREV_BLKP(bp);
+        mark_free(bp, size);
     }
 
     else {
+        remove_free(PREV_BLKP(bp));
+        remove_free(NEXT_BLKP(bp));
         size += GET_SIZE(HDRP(PREV_BLKP(bp))) +
                 GET_SIZE(FTRP(NEXT_BLKP(bp)));
-        
-        PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
-        PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
-
+                
         bp = PREV_BLKP(bp);
+        mark_free(bp, size);
     }
 
-    fix_rover(bp);
+    #if FIT_POLICY == 2
+        fix_rover(bp);
+    #endif
+
+    insert_free(bp);
 
     return bp;
 }
@@ -244,8 +278,7 @@ static void *extend_heap(size_t words)
 
     if((long)(bp = mem_sbrk(size)) == -1) return NULL;
 
-    PUT(HDRP(bp), PACK(size, 0));
-    PUT(FTRP(bp), PACK(size, 0));
+    mark_free(bp, size);
     PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1));
 
     return coalesce(bp);
@@ -264,19 +297,17 @@ static void *find_fit(size_t asize)
 
 static void *first_fit(size_t asize)
 {
-    void *bp = NEXT_BLKP(heap_listp);
+    void *bp = free_lists[get_class(asize)];
     
-    if (GET_SIZE(HDRP(bp)) == 0) return NULL;
-
-    while (GET_SIZE(HDRP(bp)) != 0)
+    while (bp != NULL)
     {
-        if (GET_ALLOC(HDRP(bp)) == 0 && GET_SIZE(HDRP(bp)) >= asize)
+        if (GET_SIZE(HDRP(bp)) >= asize)
         {
             return bp;
         }
         else
         {
-            bp = NEXT_BLKP(bp);
+            bp = SUCC(bp);
         }
     }
 
@@ -356,26 +387,78 @@ static void place(void *bp, size_t asize)
 {
     // 현재 블록 크기 읽기
     size_t csize = GET_SIZE(HDRP(bp));
+    remove_free(bp);
 
     if ((csize - asize) >= MIN_BLOCK)
     {
         size_t remain_size = csize - asize;
-
-        PUT(HDRP(bp), PACK(asize, 1));
-        PUT(FTRP(bp), PACK(asize, 1));
+        mark_alloc(bp, asize);
         bp = NEXT_BLKP(bp);  
-        PUT(HDRP(bp), PACK(remain_size, 0));
-        PUT(FTRP(bp), PACK(remain_size, 0));
+        mark_free(bp, remain_size);
+        insert_free(bp);
     }
 
     else
     {
-        PUT(HDRP(bp), PACK(csize, 1));
-        PUT(FTRP(bp), PACK(csize, 1));  
+        mark_alloc(bp, csize);  
     }
 }
 
-static void fix_rover(char *bp)
+#if FIT_POLICY == 2
+    static void fix_rover(char *bp)
+    {
+        if (rover > bp && rover < NEXT_BLKP(bp)) rover = bp;
+    }
+#endif
+
+static void mark_alloc(void *bp, size_t size)
 {
-    if (rover > bp && rover < NEXT_BLKP(bp)) rover = bp;
+    PUT(HDRP(bp), PACK(size, 1));
+    PUT(FTRP(bp), PACK(size, 1));
+}
+
+static void mark_free(void *bp, size_t size)
+{
+    PUT(HDRP(bp), PACK(size, 0));
+    PUT(FTRP(bp), PACK(size, 0));
+}
+
+static size_t adjust_size(size_t size)
+{
+    size_t asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
+    return MAX(asize, MIN_BLOCK);
+}
+
+static int get_class(size_t size)
+{
+    return 0;
+}
+
+static void insert_free(void *bp)
+{
+    size_t size = GET_SIZE(HDRP(bp));
+    int idx = get_class(size);
+    void *head = free_lists[idx];
+
+    PRED(bp) = NULL;
+    SUCC(bp) = head;
+
+    if (head != NULL) PRED(head) = bp;
+
+    free_lists[idx] = bp;
+}
+
+static void remove_free(void *bp)
+{
+    void *pred = PRED(bp);
+    void *succ = SUCC(bp);
+
+    if (pred != NULL) SUCC(pred) = succ;
+    else
+    {
+        int idx = get_class(GET_SIZE(HDRP(bp)));
+        free_lists[idx] = succ;
+    }
+
+    if (succ != NULL) PRED(succ) = pred;
 }
