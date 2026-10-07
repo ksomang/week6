@@ -351,7 +351,7 @@ static void *place(void *bp, size_t asize)
         mark_alloc(bp, csize);
         return bp;
     }
-    else if (asize >= PLACE_SPLIT)          /* 큰 블록: 뒤쪽에 */
+    else if (asize < PLACE_SPLIT)          /* 작은 블록: 뒤쪽에 */
     {
         mark_free(bp, remain);              /* 앞 조각 헤더를 먼저 써야 */
         insert_free(bp);
@@ -359,7 +359,7 @@ static void *place(void *bp, size_t asize)
         mark_alloc(alloc_bp, asize);
         return alloc_bp;
     }
-    else                                    /* 작은 블록: 앞쪽에 */
+    else                                    /* 큰 블록: 앞쪽에 */
     {
         mark_alloc(bp, asize);
         char *next = NEXT_BLKP(bp);
