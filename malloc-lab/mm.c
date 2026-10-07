@@ -84,6 +84,9 @@ team_t team = {
 #define GET_SIZE(p) (GET(p) & ~0x7)
 #define GET_ALLOC(p) (GET(p) & 0x1)
 
+/* 앞 블록이 할당이면 2, 가용이면 0 */
+#define GET_PREV_ALLOC(p) (GET(p) & 0x2)
+
 /* 블록 포인터 bp로 헤더와 푸터의 주소를 구한다 */
 #define HDRP(bp) ((char *)(bp) - WSIZE)
 #define FTRP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE)
@@ -133,7 +136,7 @@ int mm_init(void)
     PUT(heap_listp, 0);                             /* 패딩 */
     PUT(heap_listp + (1 * WSIZE), PACK(DSIZE, 1));  /* 프롤로그 헤더 */
     PUT(heap_listp + (2 * WSIZE), PACK(DSIZE, 1));  /* 프롤로그 푸터 */
-    PUT(heap_listp + (3 * WSIZE), PACK(0, 1));      /* 에필로그 헤더 */
+    PUT(heap_listp + (3 * WSIZE), PACK(0, 1) | 0x2);     /* 에필로그 헤더 */
 
     heap_listp += (2 * WSIZE);
 
@@ -163,16 +166,15 @@ void *mm_malloc(size_t size)
         return place(bp, asize);
     }
 
-    char *heap_end = mem_sbrk(0);           /* 지금 힙 끝 (brk) */
-    char *last_ftr = heap_end - DSIZE;      /* 에필로그 바로 앞 = 마지막 블록 푸터 */
+    char *heap_end = mem_sbrk(0);                   /* 지금 힙 끝 (brk) */
 
-    if (GET_ALLOC(last_ftr) == 0)
+    if (GET_PREV_ALLOC(heap_end - WSIZE) == 0)      /* 에필로그가 "내 앞은 가용"이라고 하면 */
     {
-        extendsize = asize - GET_SIZE(last_ftr);    /* 가용이면 부족한 만큼만 */
+        extendsize = asize - GET_SIZE(heap_end - DSIZE);   /* 그때만 푸터를 읽는다 */
     }
     else
     {
-        extendsize = MAX(asize, CHUNKSIZE);         /* 할당이면 넉넉하게 */
+        extendsize = MAX(asize, CHUNKSIZE);
     }
 
     if ((bp = extend_heap(extendsize/WSIZE)) == NULL) return NULL;
@@ -244,7 +246,7 @@ void *mm_realloc(void *bp, size_t size)
     newbp = mm_malloc(size);
     if (newbp == NULL) return NULL;
 
-    copySize = GET_SIZE(HDRP(oldbp)) - DSIZE;
+    copySize = GET_SIZE(HDRP(oldbp)) - WSIZE;
     if (size < copySize)
         copySize = size;
     memcpy(newbp, oldbp, copySize);
@@ -258,7 +260,7 @@ void *mm_realloc(void *bp, size_t size)
  */
 static void *coalesce(void *bp)
 {
-    size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));  /* 앞 블록 할당 비트 */
+    size_t prev_alloc = GET_PREV_ALLOC(HDRP(bp));  /* 앞 블록 할당 비트 */
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));  /* 뒤 블록 할당 비트 */
     size_t size = GET_SIZE(HDRP(bp));                    /* 현재 블록 크기 */
 
@@ -375,14 +377,19 @@ static void *place(void *bp, size_t asize)
  */
 static void mark_alloc(void *bp, size_t size)
 {
-    PUT(HDRP(bp), PACK(size, 1));
-    PUT(FTRP(bp), PACK(size, 1));
+    size_t prev = GET_PREV_ALLOC(HDRP(bp));
+    PUT(HDRP(bp), size | 1 | prev);   /* 앞 블록 할당 비트는 그대로 둔다 */
+    char *next_hdr = HDRP(NEXT_BLKP(bp));
+    PUT(next_hdr, GET(next_hdr) | 0x2);  /* 뒤 블록 헤더의 앞 블록 할당 비트를 1로 */
 }
 
 static void mark_free(void *bp, size_t size)
 {
-    PUT(HDRP(bp), PACK(size, 0));
-    PUT(FTRP(bp), PACK(size, 0));
+    size_t prev = GET_PREV_ALLOC(HDRP(bp));
+    PUT(HDRP(bp), size | 0 | prev);       
+    PUT(FTRP(bp), PACK(size, 0));          
+    char *next_hdr = HDRP(NEXT_BLKP(bp));
+    PUT(next_hdr, GET(next_hdr) & ~0x2);   
 }
 
 /*
@@ -391,7 +398,7 @@ static void mark_free(void *bp, size_t size)
  */
 static size_t adjust_size(size_t size)
 {
-    size_t asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
+    size_t asize = DSIZE * ((size + (WSIZE) + (DSIZE - 1)) / DSIZE);
     return MAX(asize, MIN_BLOCK);
 }
 
