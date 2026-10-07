@@ -62,7 +62,7 @@ team_t team = {
 #define PRED(bp) (*(char **)(bp))
 #define SUCC(bp) (*((char **)(bp) + 1))
 
-#define LIST_NUM 1
+#define LIST_NUM 20
 
 static char *heap_listp;
 static char *rover;
@@ -309,16 +309,14 @@ static void *find_fit(size_t asize)
 
 static void *first_fit(size_t asize)
 {
-    void *bp = free_lists[get_class(asize)];
-    
-    while (bp != NULL)
+    for (int idx = get_class(asize); idx < LIST_NUM; idx++)   
     {
-        if (GET_SIZE(HDRP(bp)) >= asize)
+        void *bp = free_lists[idx];                           
+
+        while (bp != NULL)                                    
         {
-            return bp;
-        }
-        else
-        {
+            if (GET_SIZE(HDRP(bp)) >= asize) return bp;
+
             bp = SUCC(bp);
         }
     }
@@ -452,7 +450,16 @@ static size_t adjust_size(size_t size)
 
 static int get_class(size_t size)
 {
-    return 0;
+    int idx = 0;
+    int limit = 32;
+
+    while (idx < LIST_NUM - 1 && size >= limit)
+    {
+        limit = limit * 2;
+        idx++;
+    }
+
+    return idx;
 }
 
 static void insert_free(void *bp)
