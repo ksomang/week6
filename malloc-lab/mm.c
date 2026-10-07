@@ -30,6 +30,8 @@ team_t team = {
 
 /* 배치 정책: 1 = first fit, 2 = next fit, 3 = best fit */
 #define FIT_POLICY 1
+/* 0이면 LIFO, 1이면 크기 순 */
+#define INSERT_POLICY 1
 
 /* rover 업데이트 방식을 고르는 스위치 */
 /* 0 = 찾은 블록, 1 = 다음 블록 */
@@ -451,7 +453,7 @@ static size_t adjust_size(size_t size)
 static int get_class(size_t size)
 {
     int idx = 0;
-    int limit = 32;
+    size_t limit = 32;
 
     while (idx < LIST_NUM - 1 && size >= limit)
     {
@@ -466,14 +468,33 @@ static void insert_free(void *bp)
 {
     size_t size = GET_SIZE(HDRP(bp));
     int idx = get_class(size);
-    void *head = free_lists[idx];
 
-    PRED(bp) = NULL;
-    SUCC(bp) = head;
+    #if INSERT_POLICY == 0 
+        void *head = free_lists[idx];
 
-    if (head != NULL) PRED(head) = bp;
+        PRED(bp) = NULL;
+        SUCC(bp) = head;
 
-    free_lists[idx] = bp;
+        if (head != NULL) PRED(head) = bp;
+
+        free_lists[idx] = bp;
+    #else
+        char* prev = NULL;
+        char* cur = free_lists[idx];
+
+        while (cur != NULL && GET_SIZE(HDRP(cur)) < size)
+        {
+            prev = cur;
+            cur = SUCC(cur);
+        }
+
+        PRED(bp) = prev;
+        SUCC(bp) = cur;
+
+        if (cur != NULL) PRED(cur) = bp;
+        if (prev != NULL) SUCC(prev) = bp;
+        else free_lists[idx] = bp;
+    #endif
 }
 
 static void remove_free(void *bp)
